@@ -1,0 +1,29 @@
+{
+  "audio": {
+    "samplerate": 16000,
+    "silence_threshold": 3,
+    "exit_threshold": 10,
+    "gain": 3.0,
+    "vad_threshold": 0.2,
+    "whisper_model": "whisper-1",
+    "whisper_language": "ko"
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 9000
+  },
+  "cors": {
+    "allow_origins": ["*"],
+    "allow_credentials": true,
+    "allow_methods": ["*"],
+    "allow_headers": ["*"]
+  },
+  "paths": {
+    "sessions_dir": "sessions_b",
+    "inbox_dir": "inbox",
+    "temp_file_prefix": "temp_audio_"
+  },
+  "vad": {
+    "monitoring": false
+  }
+}

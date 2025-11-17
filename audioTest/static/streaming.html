@@ -1,0 +1,593 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>🎧 실시간 음성 스트리밍 (Raw PCM Stream)</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 24px; }
+    
+    .header-container {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .status-indicator {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background-color: #ccc;
+      transition: background-color 0.3s ease;
+      box-shadow: 0 0 8px rgba(0, 0, 0, 0.1);
+    }
+
+    .status-indicator.silent {
+      background-color: #ffc107;
+      box-shadow: 0 0 12px rgba(255, 193, 7, 0.6);
+    }
+
+    .status-indicator.speech {
+      background-color: #4caf50;
+      box-shadow: 0 0 12px rgba(76, 175, 80, 0.6);
+    }
+
+    .status-indicator.finished {
+      background-color: #f44336;
+      box-shadow: 0 0 12px rgba(244, 67, 54, 0.6);
+    }
+
+    .status-indicator.error {
+      animation: blink 0.5s infinite;
+    }
+
+    @keyframes blink {
+      0%, 50% { background-color: #f44336; box-shadow: 0 0 12px rgba(244, 67, 54, 0.6); }
+      51%, 100% { background-color: #ffebee; box-shadow: 0 0 8px rgba(0, 0, 0, 0.1); }
+    }
+
+    h1 { margin: 0; }
+
+    button { padding: 10px 14px; border-radius: 8px; border: 1px solid #ccc; margin-right: 8px; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    
+    #tempInput { padding: 9px; border-radius: 8px; border: 1px solid #ccc; margin-right: 8px; }
+
+    #status { white-space: pre-line; margin-top: 12px; padding: 10px; background: #f0f0f0; border-radius: 4px; min-height: 100px; font-size: 14px; }
+
+    .status-label {
+      font-size: 12px;
+      color: #666;
+      margin-top: 4px;
+    }
+
+    /* 마이크 정보 및 입력 감도 */
+    .mic-info {
+      margin-top: 16px;
+      padding: 12px;
+      background: #f5f5f5;
+      border-radius: 8px;
+      border: 1px solid #ddd;
+    }
+
+    .mic-device {
+      font-size: 13px;
+      color: #333;
+      margin-bottom: 8px;
+      font-weight: 500;
+    }
+
+    .mic-level-container {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .mic-level-label {
+      font-size: 12px;
+      color: #666;
+      min-width: 60px;
+    }
+
+    .mic-level-bar {
+      flex: 1;
+      height: 20px;
+      background: #e0e0e0;
+      border-radius: 10px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .mic-level-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #4caf50 0%, #8bc34a 50%, #ffc107 75%, #ff5722 100%);
+      width: 0%;
+      transition: width 0.1s ease;
+    }
+
+    .mic-level-value {
+      font-size: 12px;
+      color: #666;
+      min-width: 40px;
+      text-align: right;
+    }
+
+    .log-container {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      margin-top: 20px;
+    }
+
+    .log-section h3 {
+      margin: 0 0 10px 0;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .log-box {
+      border: 1px solid #999;
+      border-radius: 4px;
+      padding: 12px;
+      max-height: 350px;
+      overflow-y: auto;
+      font-family: 'Courier New', monospace;
+      font-size: 11px;
+      line-height: 1.4;
+      background: white;
+    }
+
+    #sendLog {
+      background: #e3f2fd;
+      border-color: #2196f3;
+    }
+
+    #receiveLog {
+      background: #f3e5f5;
+      border-color: #9c27b0;
+    }
+
+    .log-entry {
+      padding: 6px 0;
+      border-bottom: 1px solid rgba(0,0,0,0.1);
+    }
+
+    .log-entry:last-child {
+      border-bottom: none;
+    }
+
+    .log-time {
+      color: #999;
+      font-size: 10px;
+    }
+
+    .log-data {
+      color: #333;
+      word-break: break-all;
+    }
+
+    .send-entry {
+      color: #1976d2;
+    }
+
+    .receive-entry {
+      color: #7b1fa2;
+    }
+
+    .receive-204 {
+      background: #f5f5f5;
+      color: #999;
+    }
+
+    .receive-finished {
+      background: #ffccbc;
+    }
+
+    .receive-error {
+      background: #ffcdd2;
+    }
+  </style>
+</head>
+<body>
+  <div class="header-container">
+    <div>
+      <div class="status-indicator" id="statusIndicator"></div>
+      <div class="status-label" id="statusLabel">대기 중</div>
+    </div>
+    <h1>🎧 실시간 음성 스트리밍 (Raw PCM Stream)</h1>
+  </div>
+
+  <div>
+    <button id="startBtn">녹음 시작</button>
+    <button id="stopBtn" disabled>녹음 중지</button>
+        <input type="text" id="tempInput" placeholder="임시 입력 칸 (HTML 테스트용)" style="width: 250px;"> 
+    <button id="clearBtn">로그 초기화</button>
+  </div>
+
+    <div class="mic-info" id="micInfo" style="display: none;">
+    <div class="mic-device" id="micDevice">🎤 마이크: 감지 중...</div>
+    <div class="mic-level-container">
+      <span class="mic-level-label">입력 감도:</span>
+      <div class="mic-level-bar">
+        <div class="mic-level-fill" id="micLevelFill"></div>
+      </div>
+      <span class="mic-level-value" id="micLevelValue">0%</span>
+    </div>
+  </div>
+
+  <div id="status">Raw PCM 스트리밍을 위해 **processor.js** 파일이 동일 폴더에 있는지 확인하세요.</div>
+
+    <div class="log-container">
+    <div class="log-section">
+      <h3>📤 송신 (Raw PCM ArrayBuffer)</h3>
+      <div id="sendLog" class="log-box">로그가 여기에 표시됩니다</div>
+    </div>
+    <div class="log-section">
+      <h3>📥 수신 JSON (Judge → 프론트)</h3>
+      <div id="receiveLog" class="log-box">로그가 여기에 표시됩니다</div>
+    </div>
+  </div>
+
+  <script>
+    const COMM_URL = 'http://127.0.0.1:8000';  // 판단 서버 주소
+    
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const status = document.getElementById('status');
+    const statusIndicator = document.getElementById('statusIndicator');
+    const statusLabel = document.getElementById('statusLabel');
+    const sendLog = document.getElementById('sendLog');
+    const receiveLog = document.getElementById('receiveLog');
+    const micInfo = document.getElementById('micInfo');
+    const micDevice = document.getElementById('micDevice');
+    const micLevelFill = document.getElementById('micLevelFill');
+    const micLevelValue = document.getElementById('micLevelValue');
+
+    let sessionId;
+    let seq = 0;
+    let isRecording = false;
+    let audioContext;
+    let analyser;
+    let microphone;
+    let workletNode; // Web Audio API의 핵심 Worklet Node
+    let animationId;
+    let stream;
+    let isWorkletLoaded = false;
+    
+    function formatTime() {
+      const now = new Date();
+      return now.toLocaleTimeString('ko-KR');
+    }
+
+    function addSendLog(data) {
+      const entry = document.createElement('div');
+      entry.className = 'log-entry send-entry';
+      
+      // 전송 데이터가 Raw PCM ArrayBuffer임을 명시
+      const jsonData = {
+        sessionId: data.sessionId.substring(0, 12) + '...',
+        chunk: `<ArrayBuffer ${data.size} bytes (Raw PCM)`
+      };
+      
+      entry.innerHTML = `
+        <span class="log-time">[${formatTime()}] #${data.seq}</span><br>
+        <span class="log-data">${JSON.stringify(jsonData, null, 2)}</span>
+      `;
+      sendLog.appendChild(entry);
+      sendLog.scrollTop = sendLog.scrollHeight;
+    }
+
+    function addReceiveLog(seq, httpStatus, jsonData) {
+      const entry = document.createElement('div');
+      let className = 'log-entry receive-entry';
+      
+      if (httpStatus === 204) {
+        className += ' receive-204';
+      } else if (jsonData && jsonData.status === 'Finished') {
+        className += ' receive-finished';
+      } else if (jsonData && jsonData.status === 'Error') {
+        className += ' receive-error';
+      }
+      
+      entry.className = className;
+      
+      if (httpStatus === 204) {
+        entry.innerHTML = `
+          <span class="log-time">[${formatTime()}] #${seq}</span><br>
+          <span class="log-data">HTTP 204 No Content (계속 진행)</span>
+        `;
+      } else {
+        entry.innerHTML = `
+          <span class="log-time">[${formatTime()}] #${seq}</span><br>
+          <span class="log-data">${JSON.stringify(jsonData, null, 2)}</span>
+        `;
+      }
+      
+      receiveLog.appendChild(entry);
+      receiveLog.scrollTop = receiveLog.scrollHeight;
+    }
+
+    function updateIndicator(statusValue) {
+      statusIndicator.classList.remove('silent', 'speech', 'finished', 'error');
+      
+      if (statusValue === 'Silent') {
+        statusIndicator.classList.add('silent');
+        statusLabel.textContent = '🟡 무음 상태';
+      } 
+      else if (statusValue === 'Speech') {
+        statusIndicator.classList.add('speech');
+        statusLabel.textContent = '🟢 음성 감지 중';
+      }
+      else if (statusValue === 'Finished') {
+        statusIndicator.classList.add('finished');
+        statusLabel.textContent = '🔴 녹음 종료';
+      }
+      else if (statusValue === 'Error') {
+        statusIndicator.classList.add('error');
+        statusLabel.textContent = '❌ 에러 발생';
+      }
+      else {
+        statusIndicator.classList.remove('silent', 'speech', 'finished', 'error');
+        statusLabel.textContent = '⚪ 대기 중';
+      }
+    }
+
+    // 마이크 입력 감도 모니터링
+    function updateMicLevel() {
+      if (!analyser || !isRecording) return;
+
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      analyser.getByteFrequencyData(dataArray);
+
+      let sum = 0;
+      for (let i = 0; i < dataArray.length; i++) {
+        sum += dataArray[i];
+      }
+      const average = sum / dataArray.length;
+      // 128 대신 255를 기준으로 가중치 부여 (시각적 피드백 향상)
+      const percentage = Math.min(100, (average / 255) * 150); 
+
+      micLevelFill.style.width = `${percentage}%`;
+      micLevelValue.textContent = `${Math.round(percentage)}%`;
+
+      animationId = requestAnimationFrame(updateMicLevel);
+    }
+
+    function stopRecording(message = '') {
+        isRecording = false;
+        
+        if (animationId) {
+            cancelAnimationFrame(animationId);
+            animationId = null;
+        }
+        
+        // 🔥 이 부분 추가: AudioWorklet에 정리 명령 전송
+        if (workletNode) {
+            workletNode.port.postMessage('stop');  // ← processor.js의 cleanup 호출
+            workletNode.port.onmessage = null;
+            workletNode.disconnect();
+            workletNode = null;  // 참조 해제 추가
+        }
+        
+        // 스트림 트랙 중지
+        if (stream) {
+            stream.getTracks().forEach(track => {
+                track.stop();
+                console.log('트랙 중지:', track.label);  // 로그 추가
+            });
+            stream = null;  // 참조 해제 추가
+        }
+
+        // 나머지 노드 연결 해제
+        if (microphone) {
+            microphone.disconnect();
+            microphone = null;  // 참조 해제 추가
+        }
+        if (analyser) {
+            analyser.disconnect();
+            analyser = null;  // 참조 해제 추가
+        }
+        
+        // AudioContext 닫기
+        if (audioContext && audioContext.state !== 'closed') {
+            audioContext.close().then(() => {
+                console.log('AudioContext 정리 완료');
+            });
+            audioContext = null;  // 참조 해제 추가
+        }
+        
+        micInfo.style.display = 'none';
+        micLevelFill.style.width = '0%';
+        micLevelValue.textContent = '0%';
+        
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        
+        if (message) {
+            status.textContent += `\n${message}`;
+        }
+    }
+
+    function resetUI() {
+      status.textContent = '대기 중…';
+      updateIndicator('Reset');
+    }
+
+    clearBtn.addEventListener('click', () => {
+      sendLog.innerHTML = '로그 초기화됨';
+      receiveLog.innerHTML = '로그 초기화됨';
+      status.textContent = '대기 중…';
+      updateIndicator('Reset');
+    });
+
+    // 🚨 핵심 전송 로직: Raw PCM ArrayBuffer 전송 🚨
+    async function sendPCMChunk(buffer) {
+        if (!isRecording) return;
+
+        const currentSeq = seq++;
+        const chunkSize = buffer.byteLength;
+        
+        // ArrayBuffer를 Blob으로 감싸서 FormData에 추가
+        const blob = new Blob([buffer], { type: 'application/octet-stream' });
+
+        const formData = new FormData();
+        formData.append('sessionId', sessionId);
+        formData.append('seq', currentSeq);  // ← 추가!
+        formData.append('chunk', blob, `chunk-${currentSeq}.raw`); 
+
+
+
+
+        // 📤 송신 로그
+        addSendLog({
+            seq: currentSeq,
+            size: chunkSize,
+            sessionId: sessionId
+        });
+
+        status.textContent += `\n[전송 #${currentSeq}] ${chunkSize} bytes (Raw PCM)`;
+
+        try {
+            const uploadRes = await fetch(`${COMM_URL}/upload-chunk`, { 
+                method: 'POST', 
+                body: formData 
+            });
+            
+            const httpStatus = uploadRes.status;
+            
+            if (httpStatus === 204) {
+                addReceiveLog(currentSeq, 204, null);
+                status.textContent += ` → 204 (계속)`;
+                
+            } else if (httpStatus === 200) {
+                const jsonData = await uploadRes.json();
+                addReceiveLog(currentSeq, 200, jsonData);
+                
+                if (jsonData.status) {
+                    updateIndicator(jsonData.status);
+                    status.textContent += ` → ${jsonData.status}`;
+                    
+                    if (jsonData.text) {
+                        status.textContent += `\n📝 인식: "${jsonData.text}"`;
+                    }
+                }
+
+                if (jsonData.status === 'Finished') {
+                    status.textContent += `\n\n🎉 음성 인식 완료! (2초 후 초기화)`;
+                    setTimeout(() => {
+                        stopRecording('음성 인식 완료');
+                        resetUI();
+                    }, 2000);
+                }
+                
+            } else if (httpStatus === 500) {
+                const jsonData = await uploadRes.json();
+                addReceiveLog(currentSeq, 500, jsonData);
+                updateIndicator('Error');
+                status.textContent += `\n\n❌ 서버 에러 발생! (2초 후 초기화)`;
+                setTimeout(() => {
+                    stopRecording('에러로 인해 중지됨');
+                    resetUI();
+                }, 2000);
+            }
+            
+        } catch (err) {
+            status.textContent += `\n✗ 업로드 실패: ${err.message}`;
+            console.error("업로드 실패:", err);
+        }
+    }
+
+
+    startBtn.addEventListener('click', async () => {
+        try {
+            // 1. 마이크 스트림 획득
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            
+            // 마이크 장치 정보 표시
+            const audioDevice = stream.getAudioTracks()[0].getSettings();
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const device = devices.find(d => d.kind === 'audioinput' && d.deviceId === audioDevice.deviceId);
+            micDevice.textContent = `🎤 마이크: ${device ? device.label : '기본 마이크'}`;
+            micInfo.style.display = 'block';
+
+            // 2. AudioContext와 Worklet 설정
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            
+            // Worklet 로드 (한 번만 로드)
+            if (!isWorkletLoaded) {
+                // processor.js 파일을 로드
+                await audioContext.audioWorklet.addModule('/static/processor.js');
+                isWorkletLoaded = true;
+            }
+
+            // 3. 노드 생성 및 연결
+            analyser = audioContext.createAnalyser(); // 레벨 모니터링용
+            analyser.fftSize = 256;
+            microphone = audioContext.createMediaStreamSource(stream);
+            // Worklet 노드 생성 (processor.js에 정의된 이름 사용)
+            workletNode = new AudioWorkletNode(audioContext, 'audio-stream-processor');
+
+            // 연결 순서: 마이크 -> 분석기(모니터링)
+            microphone.connect(analyser);
+            // 마이크 -> 워크릿 노드(데이터 추출)
+            microphone.connect(workletNode);
+
+            // 4. Worklet에서 PCM 데이터 수신 및 전송
+            workletNode.port.onmessage = (event) => {
+                // processor.js에서 0.5초마다 전송하는 Raw PCM 데이터(ArrayBuffer)
+                sendPCMChunk(event.data); 
+            };
+            
+            // 5. 세션 시작 및 UI 업데이트
+            const startRes = await fetch(`${COMM_URL}/start`, { method: 'POST' });
+            const startData = await startRes.json();
+            sessionId = startData.sessionId;
+            seq = 0;
+
+            sendLog.innerHTML = '';
+            receiveLog.innerHTML = '';
+            status.textContent = `✅ 세션 시작: ${sessionId}\n🎤 녹음 중... (Raw PCM 스트리밍)`;
+            updateIndicator('Silent');
+            isRecording = true;
+
+            // 마이크 레벨 모니터링 시작
+            updateMicLevel();
+
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+
+        } catch (err) {
+            status.textContent = `✗ 마이크 접근/Worklet 에러: ${err.name}: ${err.message}. ${err.name === 'NotSupportedError' ? '브라우저가 Web Audio API를 지원하지 않거나, AudioWorklet 로딩에 실패했습니다.' : ''}`;
+            micInfo.style.display = 'none';
+            console.error("마이크 접근 에러:", err);
+            stopRecording();
+        }
+    });
+
+    stopBtn.addEventListener('click', () => {
+      stopRecording('수동으로 중지됨');
+      resetUI();
+    });
+
+    // 🔥 페이지 벗어날 때 자동 정리
+    window.addEventListener('beforeunload', () => {
+        if (workletNode) {
+            workletNode.port.postMessage('stop');
+        }
+        stopRecording('페이지 벗어남');
+    });
+
+    // 🔥 페이지 숨김 시에도 정리 (모바일 대응)
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden && isRecording) {
+            console.log('페이지 숨김 감지 - 녹음 중지');
+            stopRecording('페이지 숨김');
+            resetUI();
+        }
+    });
+
+  </script>
+</body>
+</html>

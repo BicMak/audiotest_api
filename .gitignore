@@ -1,0 +1,42 @@
+# 환경 설정 파일
+.env
+judgeTest/.env
+audioTest/.env
+
+# Python 캐시
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+judgeTest/__pycache__/
+audioTest/__pycache__/
+
+# 세션 데이터
+sessions/
+judgeTest/sessions/
+audioTest/sessions/
+judgeTest/sessions_b/
+audioTest/sessions_b/
+judgeTest/inbox
+judgeTest/logs
+judgeTest/inbox
+
+# IDE 설정
+.vscode/
+
+# 임시 오디오 파일
+*.wav
+temp_audio*.wav
+judgeTest/temp_audio*.wav
+audioTest/temp_audio*.wav
+
+# 로그 파일
+*.log
+
+# OS 파일
+.DS_Store
+Thumbs.db
+
+# 가상개발환경
+server1/
+server2/
