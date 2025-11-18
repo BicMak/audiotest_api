@@ -3,8 +3,8 @@
     "samplerate": 16000,
     "silence_threshold": 3,
     "exit_threshold": 10,
-    "gain": 3.0,
-    "vad_threshold": 0.2,
+    "gain": 1.0,
+    "vad_threshold": 0.5,
     "whisper_model": "whisper-1",
     "whisper_language": "ko"
   },

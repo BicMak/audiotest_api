@@ -3,9 +3,12 @@
 판단 서버 (Judge Server)
 청크를 받아서 VAD 처리하고 status 반환
 """
+import librosa
+
 from uuid import uuid4
 import asyncio
 import dataclasses
+import shutil
 from openai import OpenAI
 import time
 from silero_vad import load_silero_vad, get_speech_timestamps
@@ -253,7 +256,10 @@ _vad_model = VADModel(AUDIO_CONFIG, VAD_CONFIG)
 async def process_audio_chunk(session_id: str, audio_data, reset: bool = False) -> dict:
     """실시간 오디오 청취 및 텍스트 변환"""
     vad_model = _vad_model
-    
+    audio_data = librosa.resample(audio_data, orig_sr=48000, target_sr=16000)
+
+
+
     if session_id not in session_states:
         session_states[session_id] = _AudioActivityDetection(AUDIO_CONFIG)
 
@@ -297,8 +303,12 @@ async def process_audio_chunk(session_id: str, audio_data, reset: bool = False) 
             transcript_text = response.text
             
             # 임시 파일 삭제
+                
+            os.makedirs("audio_data", exist_ok=True)
+            save_path = f"audio_data/{session_id}_{time.time()}.wav"
+            await asyncio.to_thread(shutil.copy, temp_file_name, save_path)            
             await asyncio.to_thread(os.remove, temp_file_name)
-            
+                        
             print(f"📝 인식된 텍스트: {transcript_text}")
 
         elif result["status"] in ["Error", "Speech", "Silent", "Reset"]:
@@ -333,15 +343,24 @@ async def ingest_chunk(
     try:
         chunk_data = await chunk.read()
         
+        # 🔍 디버깅: 수신 데이터 확인
+        print(f"📥 [판단] 세션: {sessionId[:8]}... | 청크 크기: {len(chunk_data)} bytes")
+        
         # Raw PCM을 numpy 배열로 변환
         audio_array = np.frombuffer(chunk_data, dtype=np.int16)
         audio_data = audio_array.astype(np.float32) / 32768.0
+        
+        # 🔍 디버깅: 변환 후 확인
+        print(f"🔄 [판단] 샘플 수: {len(audio_data)} | 범위: [{audio_data.min():.3f}, {audio_data.max():.3f}]")
         
         # Gain 조절
         audio_data = audio_data * AUDIO_CONFIG.GAIN
         
         # VAD 처리
         result = await process_audio_chunk(sessionId, audio_data) 
+        
+        # 🔍 디버깅: VAD 결과
+        print(f"🎯 [판단] VAD 결과: {result['status']}")
         
         # 상태별 응답
         if result["status"] == "Error":
@@ -368,7 +387,6 @@ async def ingest_chunk(
             "text": None,
             "detail": str(e)
         }, status_code=500)
-
 
 # ========== CLI 모드 ==========
 if __name__ == '__main__':
