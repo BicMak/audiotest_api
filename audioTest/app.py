@@ -142,87 +142,68 @@ def start():
     return {"sessionId": sid}
 
 
-@app.post("/upload-chunk")
-async def upload_chunk(
+@app.post("/ingest-chunk")
+async def ingest_chunk(
     sessionId: str = Form(...),
-    seq: str = Form(...),
     chunk: UploadFile = Form(...),
+    mode: str = Form("chunk")
 ):
     """
-    오디오 청크 패스스루 (Raw PCM)
+    오디오 청크/파일 패스스루
     
-    Flow:
-        1. 프론트엔드에서 Raw PCM 청크 수신
-        2. 그대로 판단서버로 전달
-        3. 응답 받아서 프론트엔드로 반환
-        
     Args:
         sessionId: 세션 ID
-        seq: 청크 순서 번호
-        chunk: Raw PCM 청크 파일
+        chunk: Raw PCM 청크 또는 WAV 파일
+        mode: "chunk" (스트리밍) 또는 "file" (파일 전사)
         
     Returns:
         {
-            "seq": int,
             "status": "Silent" | "Speech" | "Finished" | "Error",
             "text": str | null
         }
     """
     try:
-        # 1. 메타데이터 로드
-        meta = load_meta(sessionId)
+        chunk_data = await chunk.read()
         
-        if meta["state"] == "ended":
-            return {
-                "seq": int(seq),
-                "status": "Finished",
-                "text": None
-            }
-
-        # 2. 판단서버로 Raw PCM 그대로 전달
-        status_code, response = await send_to_judge(sessionId, chunk)
-        
-        judge_status = response.get("status", "Error")
-        text = response.get("text", None)
-        
-        # 3. 상태 변환
-        frontend_status = judge_status_to_frontend_status(
-            judge_status, 
-            meta.get("had_speech", False)
-        )
-        
-        # 4. 메타데이터 업데이트
-        if frontend_status == "Speech" and not meta.get("had_speech", False):
-            # 첫 음성 감지
-            meta["state"] = "recording"
-            meta["had_speech"] = True
-            save_meta(sessionId, meta)
-            
-        elif frontend_status == "Finished":
-            # 음성 종료
-            meta["state"] = "ended"
-            save_meta(sessionId, meta)
-        
-        # 5. 응답 반환
-        return {
-            "seq": int(seq),
-            "status": frontend_status,
-            "text": text if text else "--------"
+        files = {
+            "chunk": (chunk.filename, chunk_data, "application/octet-stream")
         }
-
+        data = {
+            "sessionId": sessionId,
+            "mode": mode
+        }
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:  # 파일 모드는 시간 더 필요
+            resp = await client.post(
+                JUDGE_INGEST_CHUNK,
+                data=data,
+                files=files
+            )
+        
+        # 204: 계속 진행 (스트리밍 모드)
+        if resp.status_code == 204:
+            return JSONResponse({
+                "status": "Silent",
+                "text": None
+            }, status_code=200)
+        
+        # 200: Finished
+        elif resp.status_code == 200:
+            return JSONResponse(resp.json(), status_code=200)
+        
+        # 500: Error
+        else:
+            return JSONResponse(resp.json(), status_code=500)
+            
     except Exception as e:
-        print(f"❌ 에러 발생: {e}")
+        print(f"❌ 판단 서버 통신 에러: {e}")
         import traceback
         traceback.print_exc()
-        
         return JSONResponse({
-            "seq": int(seq) if seq else -1,
             "status": "Error",
-            "text": f"에러: {str(e)}",
-            "error": "upload_failed",
+            "text": None,
             "detail": str(e)
         }, status_code=500)
-
 
 if __name__ == "__main__":
     import uvicorn

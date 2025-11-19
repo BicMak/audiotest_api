@@ -11,6 +11,10 @@
     button { padding: 10px 14px; border-radius: 8px; border: 1px solid #ccc; margin-right: 8px; cursor: pointer; }
     button:disabled { opacity: 0.6; cursor: not-allowed; }
 
+    /* ========== 모드 선택 버튼 ========== */
+    .mode-btn { background: #f0f0f0; }
+    .mode-btn.active { background: #2196f3; color: white; border-color: #2196f3; }
+
     /* ========== 헤더 & 상태 인디케이터 ========== */
     .header-container { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; }
     .status-indicator { width: 24px; height: 24px; border-radius: 50%; background-color: #ccc; transition: background-color 0.3s ease; box-shadow: 0 0 8px rgba(0, 0, 0, 0.1); }
@@ -28,6 +32,10 @@
     .mic-level-fill { height: 100%; background: linear-gradient(90deg, #4caf50 0%, #8bc34a 50%, #ffc107 75%, #ff5722 100%); width: 0%; transition: width 0.1s ease; }
     .mic-level-value { font-size: 12px; color: #666; min-width: 40px; text-align: right; }
 
+    /* ========== 파일 업로드 영역 ========== */
+    .file-upload-area { margin-top: 12px; padding: 16px; background: #e3f2fd; border-radius: 8px; border: 2px dashed #2196f3; }
+    .file-upload-area input[type="file"] { margin-bottom: 10px; }
+
     /* ========== 상태 텍스트 ========== */
     #status { white-space: pre-line; margin-top: 12px; padding: 10px; background: #f0f0f0; border-radius: 4px; min-height: 60px; font-size: 14px; }
   </style>
@@ -43,10 +51,22 @@
     <h1>🎧 실시간 음성 스트리밍</h1>
   </div>
 
-  <!-- ========== 버튼 영역 ========== -->
-  <div>
+  <!-- ========== 모드 선택 영역 ========== -->
+  <div style="margin-bottom: 12px;">
+    <button id="streamModeBtn" class="mode-btn active">🎙️ 스트리밍</button>
+    <button id="fileModeBtn" class="mode-btn">📁 파일</button>
+  </div>
+
+  <!-- ========== 스트리밍 모드 버튼 ========== -->
+  <div id="streamControls">
     <button id="startBtn">녹음 시작</button>
     <button id="stopBtn" disabled>녹음 중지</button>
+  </div>
+
+  <!-- ========== 파일 모드 업로드 영역 ========== -->
+  <div id="fileUploadArea" class="file-upload-area" style="display: none;">
+    <input type="file" id="audioFile" accept=".wav" />
+    <button id="uploadBtn">📤 업로드 & 전사</button>
   </div>
 
   <!-- ========== 마이크 정보 영역 ========== -->
@@ -88,6 +108,12 @@
     const micLevelValue = document.getElementById('micLevelValue');
     const waveformCanvas = document.getElementById('waveformCanvas');
     const waveformCtx = waveformCanvas.getContext('2d');
+    const streamModeBtn = document.getElementById('streamModeBtn');
+    const fileModeBtn = document.getElementById('fileModeBtn');
+    const streamControls = document.getElementById('streamControls');
+    const fileUploadArea = document.getElementById('fileUploadArea');
+    const audioFile = document.getElementById('audioFile');
+    const uploadBtn = document.getElementById('uploadBtn');
 
     // ========================================
     // 상태 변수
@@ -101,6 +127,79 @@
     let workletNode;
     let animationId;
     let stream;
+    let currentMode = 'chunk';  // 'chunk' 또는 'file'
+
+    // ========================================
+    // 모드 전환
+    // ========================================
+    streamModeBtn.addEventListener('click', () => {
+      currentMode = 'chunk';
+      streamModeBtn.classList.add('active');
+      fileModeBtn.classList.remove('active');
+      streamControls.style.display = 'block';
+      fileUploadArea.style.display = 'none';
+      status.textContent = '대기 중...';
+      updateIndicator('Reset');
+    });
+
+    fileModeBtn.addEventListener('click', () => {
+      currentMode = 'file';
+      fileModeBtn.classList.add('active');
+      streamModeBtn.classList.remove('active');
+      streamControls.style.display = 'none';
+      fileUploadArea.style.display = 'block';
+      micInfo.style.display = 'none';
+      status.textContent = 'WAV 파일을 선택해주세요.';
+      updateIndicator('Reset');
+    });
+
+    // ========================================
+    // 파일 업로드 처리
+    // ========================================
+    uploadBtn.addEventListener('click', async () => {
+      const file = audioFile.files[0];
+      
+      if (!file) {
+        status.textContent = '❌ 파일을 선택해주세요.';
+        return;
+      }
+      
+      if (!file.name.endsWith('.wav')) {
+        status.textContent = '❌ WAV 파일만 지원합니다.';
+        return;
+      }
+      
+      status.textContent = '🔄 전사 중...';
+      updateIndicator('Speech');
+      uploadBtn.disabled = true;
+      
+      const formData = new FormData();
+      formData.append('sessionId', crypto.randomUUID());
+      formData.append('chunk', file);
+      formData.append('mode', 'file');
+      
+      try {
+        const res = await fetch(`${COMM_URL}/ingest-chunk`, {
+          method: 'POST',
+          body: formData
+        });
+        
+        const data = await res.json();
+        
+        if (data.status === 'Finished') {
+          status.textContent = `✅ 결과: ${data.text || '(텍스트 없음)'}`;
+          updateIndicator('Finished');
+        } else {
+          status.textContent = `❌ 오류: ${data.detail || '알 수 없는 오류'}`;
+          updateIndicator('Reset');
+        }
+      } catch (err) {
+        status.textContent = `❌ 전송 실패: ${err.message}`;
+        updateIndicator('Reset');
+      } finally {
+        uploadBtn.disabled = false;
+      }
+    });
 
     // ========================================
     // 유틸리티 함수
@@ -268,7 +367,6 @@
 
       drawWaveform(buffer);
 
-
       const currentSeq = seq++;
       const chunkSize = buffer.byteLength;
       
@@ -276,11 +374,11 @@
       const blob = new Blob([buffer], { type: 'application/octet-stream' });
       const formData = new FormData();
       formData.append('sessionId', sessionId);
-      formData.append('seq', currentSeq);
       formData.append('chunk', blob, `chunk-${currentSeq}.raw`);
+      formData.append('mode', 'chunk');
 
       try {
-        const res = await fetch(`${COMM_URL}/upload-chunk`, { 
+        const res = await fetch(`${COMM_URL}/ingest-chunk`, { 
           method: 'POST', 
           body: formData 
         });

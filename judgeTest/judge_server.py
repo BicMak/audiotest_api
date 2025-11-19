@@ -258,8 +258,6 @@ async def process_audio_chunk(session_id: str, audio_data, reset: bool = False) 
     vad_model = _vad_model
     audio_data = librosa.resample(audio_data, orig_sr=48000, target_sr=16000)
 
-
-
     if session_id not in session_states:
         session_states[session_id] = _AudioActivityDetection(AUDIO_CONFIG)
 
@@ -337,46 +335,65 @@ def start():
 @app.post("/ingest-chunk")
 async def ingest_chunk(
     sessionId: str = Form(...),
-    chunk: UploadFile = Form(...)
+    chunk: UploadFile = Form(...),
+    mode: str = Form("chunk")  # "chunk" 또는 "file"
 ):
-    """청크 수신 → VAD 처리 → 응답 반환 (Raw PCM)"""
+    """청크/파일 수신 → VAD 처리 또는 직접 전사 → 응답 반환"""
     try:
         chunk_data = await chunk.read()
+        print(f"📥 [판단] 세션: {sessionId[:8]}... | 모드: {mode} | 크기: {len(chunk_data)} bytes")
         
-        # 🔍 디버깅: 수신 데이터 확인
-        print(f"📥 [판단] 세션: {sessionId[:8]}... | 청크 크기: {len(chunk_data)} bytes")
-        
-        # Raw PCM을 numpy 배열로 변환
-        audio_array = np.frombuffer(chunk_data, dtype=np.int16)
-        audio_data = audio_array.astype(np.float32) / 32768.0
-        
-        # 🔍 디버깅: 변환 후 확인
-        print(f"🔄 [판단] 샘플 수: {len(audio_data)} | 범위: [{audio_data.min():.3f}, {audio_data.max():.3f}]")
-        
-        # Gain 조절
-        audio_data = audio_data * AUDIO_CONFIG.GAIN
-        
-        # VAD 처리
-        result = await process_audio_chunk(sessionId, audio_data) 
-        
-        # 🔍 디버깅: VAD 결과
-        print(f"🎯 [판단] VAD 결과: {result['status']}")
-        
-        # 상태별 응답
-        if result["status"] == "Error":
-            return JSONResponse({
-                "status": "Error",
-                "text": None
-            }, status_code=500)
-        
-        elif result["status"] == "Finished":
+        # ========== 파일 모드: 바로 Whisper 전사 ==========
+        if mode == "file":
+            temp_path = f"{PATH_CONFIG.TEMP_FILE_PREFIX}{sessionId}_{time.time()}.wav"
+            
+            with open(temp_path, "wb") as f:
+                f.write(chunk_data)
+            
+            def transcribe_sync():
+                with open(temp_path, "rb") as audio_file:
+                    return client.audio.transcriptions.create(
+                        model=AUDIO_CONFIG.WHISPER_MODEL,
+                        file=audio_file,
+                        language=AUDIO_CONFIG.WHISPER_LANGUAGE
+                    )
+            
+            response = await asyncio.to_thread(transcribe_sync)
+            await asyncio.to_thread(os.remove, temp_path)
+            
+            print(f"📝 [파일모드] 인식된 텍스트: {response.text}")
+            
             return JSONResponse({
                 "status": "Finished",
-                "text": result["text"]
+                "text": response.text
             }, status_code=200)
         
+        # ========== 청크 모드: VAD 처리 ==========
         else:
-            return Response(status_code=204)
+            audio_array = np.frombuffer(chunk_data, dtype=np.int16)
+            audio_data = audio_array.astype(np.float32) / 32768.0
+            
+            print(f"🔄 [판단] 샘플 수: {len(audio_data)} | 범위: [{audio_data.min():.3f}, {audio_data.max():.3f}]")
+            
+            audio_data = audio_data * AUDIO_CONFIG.GAIN
+            result = await process_audio_chunk(sessionId, audio_data)
+            
+            print(f"🎯 [판단] VAD 결과: {result['status']}")
+            
+            if result["status"] == "Error":
+                return JSONResponse({
+                    "status": "Error",
+                    "text": None
+                }, status_code=500)
+            
+            elif result["status"] == "Finished":
+                return JSONResponse({
+                    "status": "Finished",
+                    "text": result["text"]
+                }, status_code=200)
+            
+            else:
+                return Response(status_code=204)
 
     except Exception as e:
         print(f"❌ 에러: {str(e)}")
