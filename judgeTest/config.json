@@ -4,7 +4,7 @@
     "silence_threshold": 3,
     "exit_threshold": 10,
     "gain": 1.0,
-    "vad_threshold": 0.5,
+    "vad_threshold": 0.7,
     "whisper_model": "whisper-1",
     "whisper_language": "ko"
   },

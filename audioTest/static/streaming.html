@@ -173,8 +173,11 @@
       updateIndicator('Speech');
       uploadBtn.disabled = true;
       
+      const startRes = await fetch(`${COMM_URL}/start`, { method: 'POST' });
+      const startData = await startRes.json();
+
       const formData = new FormData();
-      formData.append('sessionId', crypto.randomUUID());
+      formData.append('sessionId', startData.sessionId);
       formData.append('chunk', file);
       formData.append('mode', 'file');
       

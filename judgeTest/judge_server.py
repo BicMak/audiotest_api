@@ -22,6 +22,9 @@ from pathlib import Path
 from typing import Dict
 from fastapi.middleware.cors import CORSMiddleware
 import json
+from collections import deque
+
+active_sessions = deque(maxlen=100)
 
 load_dotenv()
 
@@ -329,6 +332,7 @@ async def process_audio_chunk(session_id: str, audio_data, reset: bool = False) 
 def start():
     """새 세션 시작 (API 호환성 유지)"""
     sid = str(uuid4())
+    active_sessions.append(sid)
     return {"sessionId": sid}
 
 
@@ -339,6 +343,14 @@ async def ingest_chunk(
     mode: str = Form("chunk")  # "chunk" 또는 "file"
 ):
     """청크/파일 수신 → VAD 처리 또는 직접 전사 → 응답 반환"""
+    #함수 시작전에 무조껀 session ID 중복검사를 중복이면 에러로 반환함
+    if sessionId not in active_sessions:
+        return JSONResponse({
+            "status": "Error",
+            "text": None,
+            "detail": "Invalid sessionId. Call /start first."
+        }, status_code=400)    
+    
     try:
         chunk_data = await chunk.read()
         print(f"📥 [판단] 세션: {sessionId[:8]}... | 모드: {mode} | 크기: {len(chunk_data)} bytes")
@@ -385,6 +397,11 @@ async def ingest_chunk(
                     "status": "Error",
                     "text": None
                 }, status_code=500)
+            elif result["status"] == "Speech":
+                return JSONResponse({
+                    "status": "Speech",
+                    "text": None
+                }, status_code=200)
             
             elif result["status"] == "Finished":
                 return JSONResponse({
@@ -392,8 +409,11 @@ async def ingest_chunk(
                     "text": result["text"]
                 }, status_code=200)
             
-            else:
-                return Response(status_code=204)
+            else: #Silent
+                return JSONResponse({
+                    "status": "Silent",
+                    "text": None
+                }, status_code=200)
 
     except Exception as e:
         print(f"❌ 에러: {str(e)}")
