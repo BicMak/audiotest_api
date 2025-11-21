@@ -4,6 +4,7 @@
 청크를 받아서 VAD 처리하고 status 반환
 """
 import librosa
+import requests
 
 from uuid import uuid4
 import asyncio
@@ -49,6 +50,7 @@ class ServerConfig:
     """서버 설정"""
     HOST: str = "127.0.0.1"
     PORT: int = 9000
+    MIDDLE_SERVER_URL: str = None
 
 
 @dataclasses.dataclass
@@ -105,7 +107,8 @@ def load_config(config_path: str = "config.json"):
     server_conf = config_data.get("server", {})
     server_config = ServerConfig(
         HOST=server_conf.get("host", "127.0.0.1"),
-        PORT=server_conf.get("port", 9000)
+        PORT=server_conf.get("port", 9000),
+        MIDDLE_SERVER_URL = server_conf.get("middle_server_url",None)
     )
     
     # CORSConfig
@@ -262,6 +265,28 @@ class _AudioActivityDetection:
 # 세션 상태 및 VAD 모델 초기화
 session_states: Dict[str, _AudioActivityDetection] = {}
 _vad_model = VADModel(AUDIO_CONFIG, VAD_CONFIG)
+# =============================================
+
+def send_to_middle_server(status: str, text: str):
+    """중간 서버로 텍스트 전송 (동기 방식)"""
+    # check middle server url
+    if(SERVER_CONFIG.MIDDLE_SERVER_URL is None):
+        raise ValueError("MIDDLE_SERVER_URL이 설정되지 않았습니다.")
+    else:
+        middle_server_url = SERVER_CONFIG.MIDDLE_SERVER_URL
+
+    payload = {
+        "Status": status,
+        "text": text,
+    }
+    
+    try:
+        response = requests.post(middle_server_url, json=payload, timeout=5)
+        print(f"✅ 중간서버 전송 완료: {response.status_code}")
+        return
+    except Exception as e:
+        print(f"❌ 중간서버 전송 실패: {e}")
+        return
 
 
 # ========== 핵심 함수: 오디오 청크 처리 ==========
@@ -332,21 +357,26 @@ async def process_audio_chunk(session_id: str, audio_data, reset: bool = False) 
         print(f"세션 {session_id} 상태 정리.")
         if session_id in session_states:
             del session_states[session_id]
-                    
+
     return {"status": result_status, "text": transcript_text}
 
 
 # ========== FastAPI 라우트 ==========
 @app.post("/start")
-def start():
+def start(userId: str = Form(...)):  # 유저ID 추가
     """새 세션 시작 (API 호환성 유지)"""
     sid = str(uuid4())
-    active_sessions.append(sid)
+    active_sessions[sid] = {
+        "sessionId": sid,
+        "userId": userId,
+        "createdAt": time.time()
+    }
     return {"sessionId": sid}
 
 
 @app.post("/ingest-chunk")
 async def ingest_chunk(
+    userId: str = Form(...),
     sessionId: str = Form(...),
     chunk: UploadFile = Form(...),
     mode: str = Form("chunk")  # "chunk" 또는 "file"
@@ -357,7 +387,6 @@ async def ingest_chunk(
         return JSONResponse({
             "status": "Error",
             "text": None,
-            "detail": "Invalid sessionId. Call /start first."
         }, status_code=400)    
     
     try:
@@ -402,20 +431,31 @@ async def ingest_chunk(
             print(f"🎯 [판단] VAD 결과: {result['status']}")
             
             if result["status"] == "Error":
+                await asyncio.to_thread(
+                    send_to_middle_server, 
+                    result['status'], 
+                    None
+                )
                 return JSONResponse({
                     "status": "Error",
                     "text": None
                 }, status_code=500)
+
+            elif result["status"] == "Finished":
+                await asyncio.to_thread(
+                    send_to_middle_server, 
+                    result['status'], 
+                    result['text']
+                )
+                return JSONResponse({
+                    "status": "Finished",
+                    "text": result["text"]
+                }, status_code=200)
+
             elif result["status"] == "Speech":
                 return JSONResponse({
                     "status": "Speech",
                     "text": None
-                }, status_code=200)
-            
-            elif result["status"] == "Finished":
-                return JSONResponse({
-                    "status": "Finished",
-                    "text": result["text"]
                 }, status_code=200)
             
             else: #Silent
@@ -431,7 +471,6 @@ async def ingest_chunk(
         return JSONResponse({
             "status": "Error",
             "text": None,
-            "detail": str(e)
         }, status_code=500)
 
 # ========== CLI 모드 ==========
