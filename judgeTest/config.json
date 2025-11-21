@@ -1,10 +1,12 @@
 {
   "audio": {
     "samplerate": 16000,
-    "silence_threshold": 3,
+    "silence_threshold": 2,
     "exit_threshold": 10,
     "gain": 1.0,
-    "vad_threshold": 0.7,
+    "vad_threshold": 0.6,
+    "neg_threshold": 0.4,
+    "min_speech_duration_ms" : 350,
     "whisper_model": "whisper-1",
     "whisper_language": "ko"
   },

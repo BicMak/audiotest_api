@@ -1,6 +1,6 @@
 # tts_server.py
 from openai import OpenAI
-from fastapi import FastAPI
+from fastapi import FastAPI, Body
 from fastapi.responses import Response, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -24,23 +24,17 @@ app.add_middleware(
 # OpenAI 클라이언트
 client = OpenAI()
 
-# Request 모델
-class TTSRequest(BaseModel):
-    text: str
-    voice: str = "coral"
-    instructions: str = "Speak in a natural tone."
-
 @app.post("/generate-speech/")
-async def generate_speech(request: TTSRequest):
+async def generate_speech(request_text: str = Body(..., embed=True)):
     """텍스트를 음성으로 변환"""
     try:
         temp_path = f"tts_{time.time()}.wav"
         
         with client.audio.speech.with_streaming_response.create(
             model="gpt-4o-mini-tts",
-            voice=request.voice,
-            input=request.text,
-            instructions=request.instructions,
+            voice= "coral",
+            input=request_text,
+            instructions="Speak in a natural tone.",
             response_format="wav"
         ) as response:
             response.stream_to_file(temp_path)

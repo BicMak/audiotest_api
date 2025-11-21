@@ -39,6 +39,9 @@ class AudioConfig:
     VAD_THRESHOLD: float = 0.2
     WHISPER_MODEL: str = "whisper-1"
     WHISPER_LANGUAGE: str = "ko"
+    NEG_THRESHOLD : float = 0.1
+    MIN_SPEACH_DURATION_MS : int = 250
+
 
 
 @dataclasses.dataclass
@@ -93,7 +96,9 @@ def load_config(config_path: str = "config.json"):
         GAIN=audio_conf.get("gain", 3.0),
         VAD_THRESHOLD=audio_conf.get("vad_threshold", 0.2),
         WHISPER_MODEL=audio_conf.get("whisper_model", "whisper-1"),
-        WHISPER_LANGUAGE=audio_conf.get("whisper_language", "ko")
+        WHISPER_LANGUAGE=audio_conf.get("whisper_language", "ko"),
+        NEG_THRESHOLD=audio_conf.get("neg_threshold", 0.1),
+        MIN_SPEACH_DURATION_MS=audio_conf.get("min_speech_duration_ms", 250)
     )
     
     # ServerConfig
@@ -164,6 +169,8 @@ class VADModel:
         self.SAMPLERATE = audio_config.SAMPLERATE
         self.VAD_THRESHOLD = audio_config.VAD_THRESHOLD
         self.monitoring = vad_config.MONITORING
+        self.NEG_THRESHOLD = audio_config.NEG_THRESHOLD
+        self.MIN_SPEECH_DURATION_MS = audio_config.MIN_SPEACH_DURATION_MS
 
     def get_speech_timestamps(self, audio_data) -> list:
         """오디오 데이터에서 음성 구간의 타임스탬프를 반환"""
@@ -178,6 +185,8 @@ class VADModel:
             self.model,
             threshold=self.VAD_THRESHOLD,
             sampling_rate=self.SAMPLERATE,
+            min_speech_duration_ms = self.MIN_SPEECH_DURATION_MS,
+            neg_threshold = self.NEG_THRESHOLD,
         )
 
 
