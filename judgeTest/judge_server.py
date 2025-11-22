@@ -25,56 +25,11 @@ from fastapi.middleware.cors import CORSMiddleware
 import json
 from collections import deque
 
-active_sessions = deque(maxlen=100)
+from judge_config import AudioConfig,ServerConfig,CORSConfig,PathConfig,VADConfig
+
+active_sessions = dict()
 
 load_dotenv()
-
-# ========== 설정 클래스 ==========
-@dataclasses.dataclass
-class AudioConfig:
-    """오디오 설정"""
-    SAMPLERATE: int = 16000
-    SILENCE_THRESHOLD: int = 3
-    EXIT_THRESHOLD: int = 10
-    GAIN: float = 3.0
-    VAD_THRESHOLD: float = 0.2
-    WHISPER_MODEL: str = "whisper-1"
-    WHISPER_LANGUAGE: str = "ko"
-    NEG_THRESHOLD : float = 0.1
-    MIN_SPEACH_DURATION_MS : int = 250
-
-
-
-@dataclasses.dataclass
-class ServerConfig:
-    """서버 설정"""
-    HOST: str = "127.0.0.1"
-    PORT: int = 9000
-    MIDDLE_SERVER_URL: str = None
-
-
-@dataclasses.dataclass
-class CORSConfig:
-    """CORS 설정"""
-    ALLOW_ORIGINS: list = dataclasses.field(default_factory=lambda: ["*"])
-    ALLOW_CREDENTIALS: bool = True
-    ALLOW_METHODS: list = dataclasses.field(default_factory=lambda: ["*"])
-    ALLOW_HEADERS: list = dataclasses.field(default_factory=lambda: ["*"])
-
-
-@dataclasses.dataclass
-class PathConfig:
-    """경로 설정"""
-    SESSIONS_DIR: str = "sessions_b"
-    INBOX_DIR: str = "inbox"
-    TEMP_FILE_PREFIX: str = "temp_audio_"
-
-
-@dataclasses.dataclass
-class VADConfig:
-    """VAD 모델 설정"""
-    MONITORING: bool = False
-
 
 # ========== Config 로더 ==========
 def load_config(config_path: str = "config.json"):
@@ -197,62 +152,72 @@ class VADModel:
 class _AudioActivityDetection:
     """음성 활동 감지 클래스"""
     def __init__(self, audio_config: AudioConfig):
-        self.is_recording = False
-        self.speech_buffer = []
-        self.stop_count = 0
+        self.UserBuffer = dict()
         self.silence_threshold = audio_config.SILENCE_THRESHOLD
         self.exit_threshold = audio_config.EXIT_THRESHOLD
 
     def resetStream(self):
+        self.UserBuffer = dict()
         """스트림 상태 초기화"""
-        self.is_recording = False
-        self.speech_buffer = []
-        self.stop_count = 0
+
         return {"audio": None, "status": "Reset"}
 
-    def __call__(self, speech_detected: list, audio_buffer: np.array) -> dict:
+    def __call__(self, 
+                 user_id:str ,
+                 speech_detected: list, 
+                 audio_buffer: np.array,) -> dict:
         """음성 데이터에서 화자 활동을 감지"""
         has_speech = len(speech_detected) > 0
         user_status = "Silent"
         user_audio = None
-        
+
+        # 1. 우선 dict 버퍼가 크기를 초과 하지 않는지 테스트
+        if len(self.UserBuffer) > 100:
+            raise Exception("버퍼가 가득차서...") 
+        else:
+            if user_id not in self.UserBuffer:
+                self.UserBuffer[user_id] = {
+                    'is_recording': False,
+                    'buffer': [],
+                    'stop_count': 0
+                }
+
         if has_speech:
-            if not self.is_recording:
-                self.is_recording = True
-                self.stop_count = 0
-                self.speech_buffer = []
+            if not self.UserBuffer[user_id]['is_recording']:
+                self.UserBuffer[user_id]['is_recording'] = True
+                self.UserBuffer[user_id]['stop_count'] = 0
                 user_status = "Speech"
                 print("🎤 음성 시작")
             else:
                 user_status = "Speech"
             
-            self.speech_buffer.append(audio_buffer)
+            self.UserBuffer[user_id]['buffer'].append(audio_buffer)
             
-            if self.stop_count > 0:
-                print(f"음성 재감지 → 무음 카운트 리셋 ({self.stop_count} → 0)")
-                self.stop_count = 0
+            if self.UserBuffer[user_id]['stop_count']> 0:
+                print(f"음성 재감지 → 무음 카운트 리셋 ({self.UserBuffer[user_id]['stop_count']} → 0)")
+                self.UserBuffer[user_id]['stop_count'] = 0
             
         else:  # 무음
-            if self.is_recording:
+            if self.UserBuffer[user_id]['is_recording']:
                 zero_data = np.zeros_like(audio_buffer)
-                self.speech_buffer.append(zero_data)
-                self.stop_count += 1
+                self.UserBuffer[user_id]['buffer'].append(zero_data)
+                self.UserBuffer[user_id]['stop_count'] += 1
                 user_status = "Speech"
                 
-                print(f"연속 무음: {self.stop_count}/{self.silence_threshold}")
+                print(f"연속 무음: {self.UserBuffer[user_id]['stop_count']}/{self.silence_threshold}")
                 
-                if self.stop_count >= self.silence_threshold:
-                    speech_data = np.concatenate(self.speech_buffer, axis=0)
-                    self.is_recording = False
-                    self.stop_count = 0
-                    self.speech_buffer = []
+                if self.UserBuffer[user_id]['stop_count'] >= self.silence_threshold:
+                    speech_data = np.concatenate(self.UserBuffer[user_id]["buffer"], axis=0)
+                    self.UserBuffer[user_id]['is_recording'] = False
+                    self.UserBuffer[user_id]['stop_count']= 0
                     user_audio = speech_data
                     user_status = "Finished"
+                    self.UserBuffer.pop(user_id)
                     print("✅ 음성 종료")
                     
             else:
-                self.stop_count += 1
-                if self.stop_count >= self.exit_threshold:
+                self.UserBuffer[user_id]['stop_count'] += 1
+                if self.UserBuffer[user_id]['stop_count'] >= self.exit_threshold:
                     print(f"❌ 연속 {self.exit_threshold}번 무음으로 시스템 종료")
                     user_audio = None
                     user_status = "Error"
@@ -263,8 +228,9 @@ class _AudioActivityDetection:
 
 
 # 세션 상태 및 VAD 모델 초기화
-session_states: Dict[str, _AudioActivityDetection] = {}
+session_states = deque(maxlen=100) 
 _vad_model = VADModel(AUDIO_CONFIG, VAD_CONFIG)
+_audio_activate_model = _AudioActivityDetection(AUDIO_CONFIG)
 # =============================================
 
 def send_to_middle_server(status: str, text: str):
@@ -290,15 +256,28 @@ def send_to_middle_server(status: str, text: str):
 
 
 # ========== 핵심 함수: 오디오 청크 처리 ==========
-async def process_audio_chunk(session_id: str, audio_data, reset: bool = False) -> dict:
+async def process_audio_chunk(session_id: str, 
+                              user_id: str, 
+                              audio_data, 
+                              reset: bool = False) -> dict:
     """실시간 오디오 청취 및 텍스트 변환"""
+    
+    # 중복 체크
+    # 첫 청크면 등록, 이미 있으면 그냥 진행
+    if session_id not in session_states:
+        session_states.append(session_id)
+
     vad_model = _vad_model
     audio_data = librosa.resample(audio_data, orig_sr=48000, target_sr=16000)
 
-    if session_id not in session_states:
-        session_states[session_id] = _AudioActivityDetection(AUDIO_CONFIG)
+    
+    # 새 세션 등록 (maxlen=100 넘으면 자동으로 가장 오래된 것 제거)
+    session_states.append(session_id)
 
-    event_checker = session_states[session_id]    
+    vad_model = _vad_model
+    audio_data = librosa.resample(audio_data, orig_sr=48000, target_sr=16000)
+
+    event_checker = _audio_activate_model  
     
     result_status = None
     transcript_text = None
@@ -309,15 +288,13 @@ async def process_audio_chunk(session_id: str, audio_data, reset: bool = False) 
 
     if audio_data is not None:
         speech_timestamps = vad_model.get_speech_timestamps(audio_data)
-        result = event_checker(speech_timestamps, audio_data)
+        result = event_checker(user_id, speech_timestamps, audio_data)  # await 제거
         
         result_status = result["status"]
                 
         if result["audio"] is not None:
-            # 임시 파일 이름 생성
             temp_file_name = f"{PATH_CONFIG.TEMP_FILE_PREFIX}{session_id}_{time.time()}.wav"
             
-            # 파일 쓰기
             await asyncio.to_thread(
                 sf.write, 
                 temp_file_name, 
@@ -325,7 +302,6 @@ async def process_audio_chunk(session_id: str, audio_data, reset: bool = False) 
                 AUDIO_CONFIG.SAMPLERATE
             )
             
-            # STT 호출
             def transcribe_sync():
                 with open(temp_file_name, "rb") as audio_file:
                     return client.audio.transcriptions.create(
@@ -337,8 +313,6 @@ async def process_audio_chunk(session_id: str, audio_data, reset: bool = False) 
             response = await asyncio.to_thread(transcribe_sync)
             transcript_text = response.text
             
-            # 임시 파일 삭제
-                
             os.makedirs("audio_data", exist_ok=True)
             save_path = f"audio_data/{session_id}_{time.time()}.wav"
             await asyncio.to_thread(shutil.copy, temp_file_name, save_path)            
@@ -356,10 +330,9 @@ async def process_audio_chunk(session_id: str, audio_data, reset: bool = False) 
     if result_status in ["Finished", "Error"]:
         print(f"세션 {session_id} 상태 정리.")
         if session_id in session_states:
-            del session_states[session_id]
+            session_states.remove(session_id)
 
     return {"status": result_status, "text": transcript_text}
-
 
 # ========== FastAPI 라우트 ==========
 @app.post("/start")
@@ -367,12 +340,10 @@ def start(userId: str = Form(...)):  # 유저ID 추가
     """새 세션 시작 (API 호환성 유지)"""
     sid = str(uuid4())
     active_sessions[sid] = {
-        "sessionId": sid,
         "userId": userId,
         "createdAt": time.time()
     }
     return {"sessionId": sid}
-
 
 @app.post("/ingest-chunk")
 async def ingest_chunk(
@@ -426,7 +397,7 @@ async def ingest_chunk(
             print(f"🔄 [판단] 샘플 수: {len(audio_data)} | 범위: [{audio_data.min():.3f}, {audio_data.max():.3f}]")
             
             audio_data = audio_data * AUDIO_CONFIG.GAIN
-            result = await process_audio_chunk(sessionId, audio_data)
+            result = await process_audio_chunk(sessionId,userId, audio_data)
             
             print(f"🎯 [판단] VAD 결과: {result['status']}")
             
