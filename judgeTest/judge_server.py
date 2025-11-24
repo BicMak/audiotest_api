@@ -3,6 +3,11 @@
 판단 서버 (Judge Server)
 청크를 받아서 VAD 처리하고 status 반환
 """
+import threading
+import os
+from collections import deque
+
+
 import librosa
 import requests
 
@@ -15,7 +20,6 @@ import time
 from silero_vad import load_silero_vad, get_speech_timestamps
 import soundfile as sf
 import numpy as np
-import os
 from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, Form, Response
 from fastapi.responses import JSONResponse
@@ -23,7 +27,6 @@ from pathlib import Path
 from typing import Dict
 from fastapi.middleware.cors import CORSMiddleware
 import json
-from collections import deque
 
 from judge_config import AudioConfig,ServerConfig,CORSConfig,PathConfig,VADConfig
 
@@ -155,6 +158,7 @@ class _AudioActivityDetection:
         self.UserBuffer = dict()
         self.silence_threshold = audio_config.SILENCE_THRESHOLD
         self.exit_threshold = audio_config.EXIT_THRESHOLD
+        self.lock = threading.Lock()
 
     def resetStream(self):
         self.UserBuffer = dict()
@@ -167,64 +171,65 @@ class _AudioActivityDetection:
                  speech_detected: list, 
                  audio_buffer: np.array,) -> dict:
         """음성 데이터에서 화자 활동을 감지"""
-        has_speech = len(speech_detected) > 0
-        user_status = "Silent"
-        user_audio = None
+        with self.lock:
+            has_speech = len(speech_detected) > 0
+            user_status = "Silent"
+            user_audio = None
 
-        # 1. 우선 dict 버퍼가 크기를 초과 하지 않는지 테스트
-        if len(self.UserBuffer) > 100:
-            raise Exception("버퍼가 가득차서...") 
-        else:
-            if user_id not in self.UserBuffer:
-                self.UserBuffer[user_id] = {
-                    'is_recording': False,
-                    'buffer': [],
-                    'stop_count': 0
-                }
+            # 1. 우선 dict 버퍼가 크기를 초과 하지 않는지 테스트
+            if len(self.UserBuffer) > 100:
+                raise Exception("버퍼가 가득차서...") 
+            else:
+                if user_id not in self.UserBuffer:
+                    self.UserBuffer[user_id] = {
+                        'is_recording': False,
+                        'buffer': [],
+                        'stop_count': 0
+                    }
 
-        if has_speech:
-            if not self.UserBuffer[user_id]['is_recording']:
-                self.UserBuffer[user_id]['is_recording'] = True
-                self.UserBuffer[user_id]['stop_count'] = 0
-                user_status = "Speech"
-                print("🎤 음성 시작")
-            else:
-                user_status = "Speech"
-            
-            self.UserBuffer[user_id]['buffer'].append(audio_buffer)
-            
-            if self.UserBuffer[user_id]['stop_count']> 0:
-                print(f"음성 재감지 → 무음 카운트 리셋 ({self.UserBuffer[user_id]['stop_count']} → 0)")
-                self.UserBuffer[user_id]['stop_count'] = 0
-            
-        else:  # 무음
-            if self.UserBuffer[user_id]['is_recording']:
-                zero_data = np.zeros_like(audio_buffer)
-                self.UserBuffer[user_id]['buffer'].append(zero_data)
-                self.UserBuffer[user_id]['stop_count'] += 1
-                user_status = "Speech"
-                
-                print(f"연속 무음: {self.UserBuffer[user_id]['stop_count']}/{self.silence_threshold}")
-                
-                if self.UserBuffer[user_id]['stop_count'] >= self.silence_threshold:
-                    speech_data = np.concatenate(self.UserBuffer[user_id]["buffer"], axis=0)
-                    self.UserBuffer[user_id]['is_recording'] = False
-                    self.UserBuffer[user_id]['stop_count']= 0
-                    user_audio = speech_data
-                    user_status = "Finished"
-                    self.UserBuffer.pop(user_id)
-                    print("✅ 음성 종료")
-                    
-            else:
-                self.UserBuffer[user_id]['stop_count'] += 1
-                if self.UserBuffer[user_id]['stop_count'] >= self.exit_threshold:
-                    print(f"❌ 연속 {self.exit_threshold}번 무음으로 시스템 종료")
-                    user_audio = None
-                    user_status = "Error"
+            if has_speech:
+                if not self.UserBuffer[user_id]['is_recording']:
+                    self.UserBuffer[user_id]['is_recording'] = True
+                    self.UserBuffer[user_id]['stop_count'] = 0
+                    user_status = "Speech"
+                    print("🎤 음성 시작")
                 else:
-                    user_status = "Silent"
+                    user_status = "Speech"
+                
+                self.UserBuffer[user_id]['buffer'].append(audio_buffer)
+                
+                if self.UserBuffer[user_id]['stop_count']> 0:
+                    print(f"음성 재감지 → 무음 카운트 리셋 ({self.UserBuffer[user_id]['stop_count']} → 0)")
+                    self.UserBuffer[user_id]['stop_count'] = 0
+                
+            else:  # 무음
+                if self.UserBuffer[user_id]['is_recording']:
+                    zero_data = np.zeros_like(audio_buffer)
+                    self.UserBuffer[user_id]['buffer'].append(zero_data)
+                    self.UserBuffer[user_id]['stop_count'] += 1
+                    user_status = "Speech"
+                    
+                    print(f"연속 무음: {self.UserBuffer[user_id]['stop_count']}/{self.silence_threshold}")
+                    
+                    if self.UserBuffer[user_id]['stop_count'] >= self.silence_threshold:
+                        speech_data = np.concatenate(self.UserBuffer[user_id]["buffer"], axis=0)
+                        self.UserBuffer[user_id]['is_recording'] = False
+                        self.UserBuffer[user_id]['stop_count']= 0
+                        user_audio = speech_data
+                        user_status = "Finished"
+                        self.UserBuffer.pop(user_id)
+                        print("✅ 음성 종료")
+                        
+                else:
+                    self.UserBuffer[user_id]['stop_count'] += 1
+                    if self.UserBuffer[user_id]['stop_count'] >= self.exit_threshold:
+                        print(f"❌ 연속 {self.exit_threshold}번 무음으로 시스템 종료")
+                        user_audio = None
+                        user_status = "Error"
+                    else:
+                        user_status = "Silent"
 
-        return {"audio": user_audio, "status": user_status}
+            return {"audio": user_audio, "status": user_status}
 
 
 # 세션 상태 및 VAD 모델 초기화
