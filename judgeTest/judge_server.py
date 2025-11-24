@@ -266,15 +266,12 @@ async def process_audio_chunk(session_id: str,
     # 첫 청크면 등록, 이미 있으면 그냥 진행
     if session_id not in session_states:
         session_states.append(session_id)
-
-    vad_model = _vad_model
-    audio_data = librosa.resample(audio_data, orig_sr=48000, target_sr=16000)
-
     
     # 새 세션 등록 (maxlen=100 넘으면 자동으로 가장 오래된 것 제거)
     session_states.append(session_id)
 
     vad_model = _vad_model
+    #librosa 함수를 await로 비동기 처리가 필요함(느리니깐 동시성확보 필요)
     audio_data = librosa.resample(audio_data, orig_sr=48000, target_sr=16000)
 
     event_checker = _audio_activate_model  
@@ -287,6 +284,7 @@ async def process_audio_chunk(session_id: str,
         return {"status": result["status"], "text": None}
 
     if audio_data is not None:
+        #tiem스탬프 함수도 결국 동기성이 필요함, event checker도 동일
         speech_timestamps = vad_model.get_speech_timestamps(audio_data)
         result = event_checker(user_id, speech_timestamps, audio_data)  # await 제거
         
