@@ -66,7 +66,9 @@ def load_config(config_path: str = "config.json"):
     server_config = ServerConfig(
         HOST=server_conf.get("host", "127.0.0.1"),
         PORT=server_conf.get("port", 9000),
-        MIDDLE_SERVER_URL = server_conf.get("middle_server_url",None)
+        MIDDLE_SERVER_URL = server_conf.get("middle_server_url",None),
+        MIDDLE_SERVER_SEND = server_conf.get("middle_server_send",False),
+
     )
     
     # CORSConfig
@@ -226,6 +228,7 @@ class _AudioActivityDetection:
                         print(f"❌ 연속 {self.exit_threshold}번 무음으로 시스템 종료")
                         user_audio = None
                         user_status = "Error"
+                        self.UserBuffer.pop(user_id)  # ← 이거 추가 필요
                     else:
                         user_status = "Silent"
 
@@ -272,8 +275,6 @@ async def process_audio_chunk(session_id: str,
     if session_id not in session_states:
         session_states.append(session_id)
     
-    # 새 세션 등록 (maxlen=100 넘으면 자동으로 가장 오래된 것 제거)
-    session_states.append(session_id)
 
     vad_model = _vad_model
     #librosa 함수를 await로 비동기 처리가 필요함(느리니깐 동시성확보 필요)
@@ -387,6 +388,8 @@ async def ingest_chunk(
             
             print(f"📝 [파일모드] 인식된 텍스트: {response.text}")
             
+            active_sessions.pop(sessionId, None)  # ← 세션 정리
+
             return JSONResponse({
                 "status": "Finished",
                 "text": response.text
@@ -404,23 +407,30 @@ async def ingest_chunk(
             
             print(f"🎯 [판단] VAD 결과: {result['status']}")
             
+            # ========== 세션 정리 로직 추가 ==========
+            if result["status"] in ["Finished", "Error"]:
+                active_sessions.pop(sessionId, None)  # ← 세션 정리
+                print(f"🗑️  세션 {sessionId[:8]}... 제거됨")
+
             if result["status"] == "Error":
-                await asyncio.to_thread(
-                    send_to_middle_server, 
-                    result['status'], 
-                    None
-                )
+                if SERVER_CONFIG.MIDDLE_SERVER_SEND:
+                    await asyncio.to_thread(
+                        send_to_middle_server, 
+                        result['status'], 
+                        None
+                    )
                 return JSONResponse({
                     "status": "Error",
                     "text": None
                 }, status_code=500)
 
             elif result["status"] == "Finished":
-                await asyncio.to_thread(
-                    send_to_middle_server, 
-                    result['status'], 
-                    result['text']
-                )
+                if SERVER_CONFIG.MIDDLE_SERVER_SEND:
+                    await asyncio.to_thread(
+                        send_to_middle_server, 
+                        result['status'], 
+                        result['text']
+                    )
                 return JSONResponse({
                     "status": "Finished",
                     "text": result["text"]
@@ -431,7 +441,7 @@ async def ingest_chunk(
                     "status": "Speech",
                     "text": None
                 }, status_code=200)
-            
+
             else: #Silent
                 return JSONResponse({
                     "status": "Silent",

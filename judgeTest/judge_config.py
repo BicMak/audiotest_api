@@ -7,12 +7,12 @@ class AudioConfig:
     SAMPLERATE: int = 16000
     SILENCE_THRESHOLD: int = 3
     EXIT_THRESHOLD: int = 10
-    GAIN: float = 1.0
+    GAIN: float = 3.0
     VAD_THRESHOLD: float = 0.2
     WHISPER_MODEL: str = "whisper-1"
     WHISPER_LANGUAGE: str = "ko"
     NEG_THRESHOLD : float = 0.1
-    MIN_SPEACH_DURATION_MS : int = 100
+    MIN_SPEACH_DURATION_MS : int = 250
 
 @dataclasses.dataclass
 class ServerConfig:
@@ -20,6 +20,7 @@ class ServerConfig:
     HOST: str = "127.0.0.1"
     PORT: int = 9000
     MIDDLE_SERVER_URL: str = None
+    MIDDLE_SERVER_SEND : bool = False
 
 @dataclasses.dataclass
 class CORSConfig:
@@ -39,4 +40,4 @@ class PathConfig:
 @dataclasses.dataclass
 class VADConfig:
     """VAD 모델 설정"""
-    MONITORING: bool = True
+    MONITORING: bool = False

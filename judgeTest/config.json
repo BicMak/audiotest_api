@@ -12,7 +12,9 @@
   },
   "server": {
     "host": "127.0.0.1",
-    "port": 9000
+    "port": 9000,
+    "middle_server_url" : "",
+    "middle_server_send" : false
   },
   "cors": {
     "allow_origins": ["*"],

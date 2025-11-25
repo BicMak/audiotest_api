@@ -58,6 +58,7 @@ async def start():
 
 @app.post("/ingest-chunk")
 async def ingest_chunk(
+    userId: str = Form(...), 
     sessionId: str = Form(...),
     chunk: UploadFile = Form(...),
     mode: str = Form("chunk")
@@ -83,6 +84,7 @@ async def ingest_chunk(
             "chunk": (chunk.filename, chunk_data, "application/octet-stream")
         }
         data = {
+            "userId": userId,  
             "sessionId": sessionId,
             "mode": mode
         }
